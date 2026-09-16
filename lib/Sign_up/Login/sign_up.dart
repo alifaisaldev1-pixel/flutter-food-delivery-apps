@@ -79,14 +79,20 @@ class _SignupState extends State<Signup> {
             password: passwordController.text.trim(),
           );
 
-      await userCredential.user?.updateDisplayName(nameController.text.trim());
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(FirebaseAuth.instance.currentUser!.uid)
-          .set({
-            'name': nameController.text.trim(),
-            'email': emailController.text.trim(),
-          });
+      final user = userCredential.user;
+      if (user == null) {
+        throw FirebaseAuthException(code: 'user-not-found');
+      }
+
+      try {
+        await user.updateDisplayName(nameController.text.trim());
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'name': nameController.text.trim(),
+          'email': emailController.text.trim(),
+        });
+      } on FirebaseException catch (e) {
+        debugPrint('Profile save failed after signup: ${e.message}');
+      }
 
       ToastMessage.showSuccessToast('Sign up successful!');
 

@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:food_delivery_app/Dashboard/home_functions/appbar_image_setting.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
 class Home extends StatefulWidget {
@@ -17,7 +18,7 @@ class _HomeState extends State<Home> {
   final user = FirebaseAuth.instance.currentUser;
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
-  String _profileImagePath = 'assets/images/login_signup/login.png';
+  String _profileImagePath = '';
   File? _selectedImageFile;
   String? _selectedImageUrl;
   final ImagePicker _picker = ImagePicker();
@@ -26,6 +27,23 @@ class _HomeState extends State<Home> {
   void initState() {
     super.initState();
     _nameController.text = _getUserName();
+    _loadProfileImage();
+  }
+
+  Future<void> _loadProfileImage() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      await currentUser?.reload();
+      final photoUrl = FirebaseAuth.instance.currentUser?.photoURL;
+
+      if (mounted && photoUrl != null && photoUrl.isNotEmpty) {
+        setState(() {
+          _profileImagePath = photoUrl;
+        });
+      }
+    } catch (e) {
+      debugPrint('Profile image load failed: $e');
+    }
   }
 
   @override
@@ -58,18 +76,58 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    final XFile? pickedFile = await _picker.pickImage(source: source);
-    if (pickedFile != null) {
-      setState(() {
-        if (kIsWeb) {
-          _selectedImageUrl = pickedFile.path;
+    try {
+      final XFile? pickedFile = await _picker.pickImage(source: source);
+      if (pickedFile == null) return;
+
+      if (mounted) {
+        setState(() {
+          if (kIsWeb) {
+            _selectedImageUrl = pickedFile.path;
+            _selectedImageFile = null;
+          } else {
+            _selectedImageFile = File(pickedFile.path);
+            _selectedImageUrl = null;
+          }
+          _profileImagePath = pickedFile.path;
+        });
+      }
+
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final imageBytes = await pickedFile.readAsBytes();
+      final storageReference = FirebaseStorage.instance.ref().child(
+        'users/${currentUser.uid}/profile.jpg',
+      );
+      await storageReference.putData(
+        imageBytes,
+        SettableMetadata(contentType: pickedFile.mimeType ?? 'image/jpeg'),
+      );
+      final downloadUrl = await storageReference.getDownloadURL();
+      await currentUser.updatePhotoURL(downloadUrl);
+
+      if (mounted) {
+        setState(() {
+          _profileImagePath = downloadUrl;
           _selectedImageFile = null;
-        } else {
-          _selectedImageFile = File(pickedFile.path);
-          _selectedImageUrl = null;
-        }
-        _profileImagePath = pickedFile.path;
-      });
+          _selectedImageUrl = downloadUrl;
+        });
+      }
+    } on FirebaseException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save profile picture: ${e.message}'),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not save profile picture')),
+        );
+      }
     }
   }
 
@@ -156,23 +214,36 @@ class _HomeState extends State<Home> {
                                 ),
                               )
                             : _selectedImageUrl != null
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(24),
-                                    child: Image.network(
-                                      _selectedImageUrl!,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, __, ___) => const Icon(
-                                        Icons.person,
-                                        size: 42,
-                                        color: Color(0xFF7A7C88),
-                                      ),
-                                    ),
-                                  )
-                                : const Icon(
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(24),
+                                child: Image.network(
+                                  _selectedImageUrl!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Icon(
                                     Icons.person,
                                     size: 42,
                                     color: Color(0xFF7A7C88),
                                   ),
+                                ),
+                              )
+                            : _profileImagePath.startsWith('http')
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(24),
+                                child: Image.network(
+                                  _profileImagePath,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Icon(
+                                    Icons.person,
+                                    size: 42,
+                                    color: Color(0xFF7A7C88),
+                                  ),
+                                ),
+                              )
+                            : const Icon(
+                                Icons.person,
+                                size: 42,
+                                color: Color(0xFF7A7C88),
+                              ),
                       ),
                     ),
                   ),
@@ -206,9 +277,10 @@ class _HomeState extends State<Home> {
                       ),
                       onPressed: () {
                         setState(() {
-                          _profileImagePath = _selectedImageUrl ??
+                          _profileImagePath =
+                              _selectedImageUrl ??
                               _selectedImageFile?.path ??
-                              'assets/images/login_signup/login.png';
+                              '';
                         });
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
